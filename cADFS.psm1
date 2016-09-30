@@ -3,7 +3,13 @@
     Present;
 }
 
-#region DSC Resource: cADFSFarm
+enum ExtendedProtection {
+    None;
+    Allow;
+    Require;
+}
+
+
 function InstallADFSFarm {
     <#
     .Synopsis
@@ -41,6 +47,42 @@ function InstallADFSFarm {
     Write-Verbose -Message ('Entering function {0}' -f $CmdletName);
 }
 
+function AddAdfsFarmNode {
+    <#
+    .Synopsis
+    Performs the configuration of the Active Directory Federation Services farm.
+
+    .Parameter
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [pscredential] $ServiceCredential,
+		[Parameter(Mandatory = $true)]
+        [pscredential] $InstallCredential,
+        [Parameter(Mandatory = $true)]
+        [string] $CertificateThumbprint,
+        [Parameter(Mandatory = $true)]
+        [string] $PrimaryComputerName
+
+
+    )
+	
+    $CmdletName = $PSCmdlet.MyInvocation.MyCommand.Name;
+
+    Write-Verbose -Message ('Entering function {0}' -f $CmdletName);
+
+    Add-AdfsFarmNode  `
+        -CertificateThumbprint:$CertificateThumbprint `
+        -Credential $installCredential `
+        -OverwriteConfiguration:$true `
+        -ServiceAccountCredential $serviceCredential `
+		-PrimaryComputerName $PrimaryComputerName;    
+
+    Write-Verbose -Message ('Entering function {0}' -f $CmdletName);
+}
+
+#region DSC Resource: cADFSFarm
 [DscResource()]
 class cADFSFarm {
     <#
@@ -171,6 +213,209 @@ class cADFSFarm {
     }
 }
 #endregion
+
+#region DSC Resource: cADFSFarmNode
+[DscResource()]
+class cADFSFarmNode {
+    <#
+    The Ensure property is used to determine if the Active Directory Federation Service (ADFS) should be installed (Present) or not installed (Absent).
+    #>
+    [DscProperty(Mandatory)]
+    [Ensure] $Ensure;
+
+	<#
+	The PrimaryComputerName property specifies the name of the primary in a farm. The cmdlet adds the computer to the farm that has the primary that you specify.
+    #>
+    [DscProperty(Key)]
+    [string] $PrimaryComputerName;
+
+    <#
+    The CertificateThumbprint property is the thumbprint of the certificate, located in the local computer's certificate store, that will be bound to the 
+    Active Directory Federation Service (ADFS) farm.
+    #>
+    [DscProperty(Mandatory)]
+    [string] $CertificateThumbprint;
+
+    <#
+    The ServiceCredential property is a PSCredential that represents the username/password that the 
+    #>
+    [DscProperty(Mandatory)]
+    [pscredential] $ServiceCredential;
+
+    <#
+    The InstallCredential property is a PSCredential that represents the username/password of an Active Directory user account that is a member of
+    the Domain Administrators security group. This account will be used to install Active Directory Federation Services (ADFS).
+    #>
+    [DscProperty(Mandatory)]
+    [pscredential] $InstallCredential;
+
+    [cADFSFarmNode] Get() {
+        
+        Write-Verbose -Message 'Starting retrieving ADFS Sync Properties.';
+
+        try {
+            $AdfsSyncProperties = Get-AdfsSyncProperties -ErrorAction Stop;
+        }
+        catch {
+            Write-Verbose -Message ('Error occurred while retrieving ADFS properties: {0}' -f $global:Error[0].Exception.Message);
+        }
+
+        Write-Verbose -Message 'Finished retrieving ADFS Sync Properties.';
+        return $this;
+    }
+
+    [System.Boolean] Test() {
+        # Assume compliance by default
+        $Compliant = $true;
+
+
+        Write-Verbose -Message 'Testing if current node is syncing with an Active Directory Federation Services (ADFS) farm.';
+
+        try {
+            $AdfsSyncProperties = Get-AdfsSyncProperties -ErrorAction Stop;
+        }
+        catch {
+            $Compliant = $false;
+            return $Compliant;
+        }
+
+        if ($this.Ensure -eq 'Present') {
+            Write-Verbose -Message 'Checking for presence of ADFS Farm.';
+            if ($this.PrimaryComputerName -ne $AdfsSyncProperties.PrimaryComputerName) {
+                Write-Verbose -Message 'ADFS Service Name doesn''t match the desired state.';
+                $Compliant = $false;
+            }
+        }
+
+        if ($this.Ensure -eq 'Absent') {
+            Write-Verbose -Message 'Checking for absence of ADFS Farm.';
+            if ($AdfsSyncProperties) {
+                Write-Verbose -Message
+                $Compliant = $false;
+            }
+        }
+
+        return $Compliant;
+    }
+
+    [void] Set() {
+
+        ### If ADFS Farm shoud be present, then go ahead and install it.
+        if ($this.Ensure -eq [Ensure]::Present) {
+            try{
+                $AdfsSyncProperties = Get-AdfsSyncProperties -ErrorAction stop;
+            }
+            catch {
+                $AdfsSyncProperties = $false
+            }
+
+            if (!$AdfsSyncProperties) {
+                Write-Verbose -Message 'Installing Active Directory Federation Services (ADFS) farm.';
+                $AdfsFarm = @{
+                    ServiceCredential = $this.ServiceCredential;
+                    InstallCredential = $this.InstallCredential;
+                    CertificateThumbprint = $this.CertificateThumbprint;
+					PrimaryComputerName = $this.PrimaryComputerName
+                    };
+                AddAdfsFarmNode @AdfsFarm;
+            }
+
+            if ($AdfsSyncProperties) {
+                Write-Verbose -Message 'Configuring Active Directory Federation Services (ADFS) properties.';
+                $AdfsSyncProperties = @{
+                    CertificateThumbprint = $this.CertificateThumbprint;
+                    };
+                Set-AdfsProperties @AdfsSyncProperties;
+            }
+        }
+
+        if ($this.Ensure -eq [Ensure]::Absent) {
+            Remove-AdfsFarmNode -ServiceAccountCredential $this.ServiceCredential
+        }
+
+        return;
+    }
+}
+#endregion
+
+#region DSC Resource: cADFSFarmProperties
+[DscResource()]
+class cADFSFarmProperties {
+    <#
+    The Ensure property is used to determine if the Active Directory Federation Service (ADFS) should be installed (Present) or not installed (Absent).
+    #>
+    [DscProperty(Key)]
+    [Ensure] $Ensure;
+
+    <#
+
+    #>
+    [DscProperty()]
+    [string] $ExtendedProtection;
+
+
+
+
+    [cADFSFarmProperties] Get() {
+        
+        Write-Verbose -Message 'Start retrieving ADFS Farm properties.';
+
+        try {
+            $AdfsProperties = Get-AdfsProperties -ErrorAction Stop;
+        }
+        catch {
+            Write-Verbose -Message ('Error occurred while retrieving ADFS properties: {0}' -f $global:Error[0].Exception.Message);
+        }
+
+        Write-Verbose -Message 'Finished retrieving ADFS Farm configuration.';
+        return $this;
+    }
+
+    [System.Boolean] Test() {
+        # Assume compliance by default
+        $Compliant = $true;
+
+        Write-Verbose -Message 'Start testing ADFS Farm configuration.';
+        try{
+            $AdfsProperties = Get-AdfsProperties -ErrorAction stop;
+        }
+        catch {
+            Write-Verbose -Message ('Error occurred while retrieving ADFS properties: {0}' -f $global:Error[0].Exception.Message);
+            Throw "Declare cADFSFarm resource first" 
+        }
+       
+        if ($this.ExtendedProtection -ne $AdfsProperties.ExtendedProtection) {
+            Write-Verbose -Message 'ExtendedProtection doesn''t match the desired state.';
+            $Compliant = $false;
+        }
+
+        return $Compliant;
+    }
+
+    [void] Set() {
+
+        ### If ADFS Farm shoud be present, then go ahead and install it.
+        Write-Verbose -Message 'Starting setting ADFS Farm properties.';
+        try{
+            $AdfsProperties = Get-AdfsProperties -ErrorAction stop;
+        }
+        catch {
+            Throw "Declare cADFSFarm resource first" 
+        }
+
+        if ($AdfsProperties) {
+            Write-Verbose -Message 'Configuring Active Directory Federation Services (ADFS) properties.';
+            $AdfsProperties = @{
+                ExtendedProtectionTokenCheck = $this.ExtendedProtection;
+                };
+            Set-AdfsProperties @AdfsProperties;
+        }
+
+        return;
+    }
+}
+#endregion
+
 
 #region DSC Resource: cADFSRelyingPartyTrust
 [DscResource()]

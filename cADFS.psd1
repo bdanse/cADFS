@@ -29,6 +29,7 @@
     # Required for DSC to detect PS class-based resources.
     DscResourcesToExport = @(
         'cADFSFarm';
+        'cADFSFarmNode';
         'cADFSGlobalAuthenticationPolicy';
         'cADFSRelyingPartyTrust';
         );
